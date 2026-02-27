@@ -1,0 +1,25 @@
+# Placement + font settings
+font:
+  # Set this to PingFang on your Mac:
+  #   /System/Library/Fonts/PingFang.ttc
+  # or:
+  #   /System/Library/Fonts/Supplemental/PingFang.ttc
+  # If left blank, the script will try common macOS locations, then fall back to NotoSansCJK-Regular.ttc on Linux.
+  fontfile: "/System/Library/Fonts/Hiragino Sans GB.ttc"
+  fontsize_scale: 0.90   # Chinese fontsize = English fontsize * scale
+  color_rgb: [0, 0, 0]   # black
+
+layout:
+  gap_pt: 6              # Chinese x = English x1 + gap_pt
+  right_margin_pt: 18    # avoid writing too close to the page edge
+  fallback_below_gap_pt: 2
+
+translation:
+  model: "gpt-4.1-mini"  # good price/perf for short text; change as you like
+  batch_size: 30         # number of unique strings per API request
+  cache_path: ".cache_translations.json"
+
+filters:
+  skip_regex_file: "skip_regex.txt"
+  min_chars: 2
+  max_chars: 240
