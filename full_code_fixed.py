@@ -6,6 +6,7 @@ import random
 import fitz  # PyMuPDF
 from openai import OpenAI
 from openai import APIError, RateLimitError, APITimeoutError, BadRequestError
+import math
 
 # =========================
 # CONFIG
@@ -13,18 +14,22 @@ from openai import APIError, RateLimitError, APITimeoutError, BadRequestError
 PDF_IN  = "wrong_original.pdf"
 PDF_OUT = "wrong_output.pdf"
 
-# If you want to hardcode, set an absolute path here.
-# Otherwise leave blank and auto-detect common macOS locations.
-FONTFILE = "PingFangSC.ttc"
+FONTFILE = "PingFangSC.ttc"   # or leave as-is if you already use auto-detect
 FONTNAME = "CN"
 
 MODEL = "gpt-4.1-mini"
 BATCH_SIZE = 50
 CACHE_PATH = ".cache_zh.json"
 
-GAP_PT = 6
-RIGHT_MARGIN_PT = 18
-FONTSIZE_SCALE = 0.90
+# Chinese sizing inside same bbox
+ZH_SIZE_SCALE = 0.75
+ZH_MIN_FONTSIZE = 4.5
+
+# Draw red boxes around original English bboxes (debug)
+DRAW_REDBOX = True
+REDBOX_WIDTH = 0.8
+
+CHECKPOINT_EVERY = 5
 
 GLOSSARY = {
     "GENERAL NOTES": "一般说明",
@@ -46,6 +51,63 @@ SKIP_RE = [re.compile(p) for p in SKIP_REGEX]
 # =========================
 # HELPERS
 # =========================
+def rotate_rect_cw_90n(derot, rect: fitz.Rect, page_w: float, page_h: float, deg_cw: int) -> fitz.Rect:
+    """
+    Rotate an axis-aligned rect by deg_cw in {0,90,180,270} clockwise around the page.
+    Coordinates assume PyMuPDF convention: origin top-left, x right, y down.
+
+    Returns a new axis-aligned rect in the rotated coordinate system.
+    """
+    deg_cw %= 360
+    if deg_cw not in (0, 90, 180, 270):
+        raise ValueError("deg_cw must be one of 0, 90, 180, 270")
+
+    x0, y0, x1, y1 = rect.x0, rect.y0, rect.x1, rect.y1
+
+    if deg_cw == 0:
+        return fitz.Rect(x0, y0, x1, y1)
+
+    if deg_cw == 90:
+        # (x, y) -> (page_h - y, x)
+        # Apply to all corners, then bbox
+        pts = [
+            (page_h - y0, x0),
+            (page_h - y0, x1),
+            (page_h - y1, x1),
+            (page_h - y1, x0),
+        ]
+    elif deg_cw == 180:
+        # (x, y) -> (page_w - x, page_h - y)
+        pts = [
+            (page_w - x0, page_h - y0),
+            (page_w - x1, page_h - y0),
+            (page_w - x1, page_h - y1),
+            (page_w - x0, page_h - y1),
+        ]
+    else:  # deg_cw == 270
+        # print("rotated by 270 degrees")
+        # (x, y) -> (y, page_w - x)
+        # pts = [
+        #     (y0, page_w - x0),
+        #     (y0, page_w - x1),
+        #     (y1, page_w - x1),
+        #     (y1, page_w - x0),
+        # ]
+        h = min(rect.height, rect.width)
+        print("x0: {}, y0: {}, x1: {}, y1: {}".format(x0, y0, x1, y1))
+        return fitz.Rect(x0 * derot, y0 * derot, x1 * derot, y1 * derot)
+       
+        pts = [
+            (y0, page_h - x0),
+            (y0, page_h - x1),
+            (y1, page_h - x1),
+            (y1, page_h - x0),
+        ]
+
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return fitz.Rect(min(xs), min(ys), max(xs), max(ys))
+
 def norm(s: str) -> str:
     return " ".join((s or "").replace("\u00a0", " ").split()).strip()
 
@@ -82,7 +144,6 @@ def pick_fontfile(cfg: str) -> str:
     if cfg and os.path.exists(cfg):
         return cfg
 
-    # common macOS locations
     candidates = [
         "/System/Library/Fonts/Supplemental/PingFang.ttc",
         "/System/Library/Fonts/PingFang.ttc",
@@ -94,7 +155,6 @@ def pick_fontfile(cfg: str) -> str:
         if os.path.exists(p):
             return p
 
-    # if user had a local file like PingFangSC.ttc in cwd
     local = "PingFangSC.ttc"
     if os.path.exists(local):
         return local
@@ -105,18 +165,15 @@ def pick_fontfile(cfg: str) -> str:
     )
 
 def call_with_retry(fn, max_tries=6):
-    """Retry transient API errors with exponential backoff + jitter."""
     for attempt in range(1, max_tries + 1):
         try:
             return fn()
         except (RateLimitError, APITimeoutError, APIError) as e:
             wait = min(60, (2 ** (attempt - 1)) + random.random())
-            print(f"[WARN] API transient error on attempt {attempt}/{max_tries}: {e}. Sleeping {wait:.1f}s")
+            print(f"[WARN] API transient error {attempt}/{max_tries}: {e}. Sleep {wait:.1f}s")
             time.sleep(wait)
-        except BadRequestError as e:
-            # Bad request won't succeed on retry; raise immediately.
+        except BadRequestError:
             raise
-
     raise RuntimeError("API failed after retries.")
 
 def translate_batch(client: OpenAI, texts: list[str]) -> dict[str, str]:
@@ -184,6 +241,9 @@ Translate these items:
     return out
 
 
+ROTATE_DEGREE = 0
+GAP_PT = 0
+
 def main():
     if not os.path.exists(PDF_IN):
         raise FileNotFoundError(f"PDF not found: {PDF_IN}")
@@ -197,7 +257,7 @@ def main():
     doc = fitz.open(PDF_IN)
     print(f"[INFO] Pages: {doc.page_count}")
 
-    # Embed font on each page (avoid ?????)
+    # Embed font on each page
     for i, page in enumerate(doc, start=1):
         page.insert_font(fontname=FONTNAME, fontfile=fontfile)
         if i % 5 == 0 or i == doc.page_count:
@@ -208,6 +268,8 @@ def main():
     todo = set()
 
     for p_idx, page in enumerate(doc, start=1):
+        # print(f"page {i}: rotation={page.rotation}")
+        # page.set_rotation(ROTATE_DEGREE)
         d = page.get_text("dict")
         spans = []
         for block in d.get("blocks", []):
@@ -225,75 +287,133 @@ def main():
                     spans.append((t, bbox, fs))
                     if should_translate(t) and glossary_override(t) is None and t not in cache:
                         todo.add(t)
+
         spans_per_page.append(spans)
 
         if p_idx % 5 == 0 or p_idx == doc.page_count:
-            print(f"[INFO] Scanned page {p_idx}/{doc.page_count} | spans so far: {sum(len(x) for x in spans_per_page)} | unique todo: {len(todo)}")
+            print(f"[INFO] Scanned page {p_idx}/{doc.page_count} | spans: {sum(len(x) for x in spans_per_page)} | todo: {len(todo)}")
 
     # 2) translate batches
     todo = sorted(todo)
-    print(f"[INFO] Unique strings to translate (after cache/glossary/filters): {len(todo)}")
+    print(f"[INFO] Unique strings to translate: {len(todo)}")
     for i in range(0, len(todo), BATCH_SIZE):
         chunk = todo[i:i+BATCH_SIZE]
         mapping = translate_batch(client, chunk)
         cache.update(mapping)
         save_cache(CACHE_PATH, cache)
-        print(f"[INFO] Translated {min(i+BATCH_SIZE, len(todo))}/{len(todo)} unique strings")
+        print(f"[INFO] Translated {min(i+BATCH_SIZE, len(todo))}/{len(todo)}")
 
-    # 3) insert Chinese in RED next to each bbox + save every 5 pages
+    # 3) insert Chinese IN THE SAME BOX + checkpoint every 5 pages
     inserted = 0
-    checkpoint_every = 5
-
-    # base name for checkpoint outputs
     base, ext = os.path.splitext(PDF_OUT)
     if not base:
         base = "output_bilingual"
 
     for page_idx, (page, spans) in enumerate(zip(doc, spans_per_page), start=1):
-        page_w = page.rect.width
+        # page.set_rotation(ROTATE_DEGREE)
+        ox, oy = page.rect.x0, page.rect.y0  # usually (0,0)
+
+        # Arrow tail point (offset into the page)
+        tx, ty = ox + 120, oy + 120
+
+        # Draw arrow shaft
+        page.draw_line((tx, ty), (ox, oy), color=(1, 0, 0), width=3, overlay=True)
+
+        # Draw arrowhead
+        angle = math.atan2(oy - ty, ox - tx)
+        head_len = 18
+        head_ang = math.radians(28)
+
+        x1 = ox + head_len * math.cos(angle + head_ang)
+        y1 = oy + head_len * math.sin(angle + head_ang)
+        x2 = ox + head_len * math.cos(angle - head_ang)
+        y2 = oy + head_len * math.sin(angle - head_ang)
+
+        page.draw_polyline([(x1, y1), (ox, oy), (x2, y2)], color=(1, 0, 0), width=3, overlay=True)
+
+        # Label near the origin
+        label_rect = fitz.Rect(ox + 10, oy + 5, ox + 260, oy + 50)
+        page.insert_textbox(
+            label_rect,
+            "Origin (0,0)",
+            fontsize=16,
+            color=(1, 0, 0),
+            overlay=True,
+            align=fitz.TEXT_ALIGN_LEFT,
+        )
 
         for src, (x0, y0, x1, y1), fs in spans:
+            dx, dy = sp.get("dir", (1.0, 0.0))   # baseline direction
+            angle = (math.degrees(math.atan2(dy, dx)) + 360) % 360
+            nx, ny = dy, -dx
+            L = math.hypot(nx, ny) or 1.0
+            nx, ny = nx/L, ny/L
+            anchor_x = x1 + nx * GAP_PT
+            anchor_y = y0 + ny * GAP_PT
+
             if not should_translate(src):
                 continue
+
+            # Debug: draw red bbox of the original English
+            if DRAW_REDBOX:
+                page.draw_rect(fitz.Rect(x0, y0, x1, y1), color=(1, 0, 0), width=REDBOX_WIDTH, overlay=True)
 
             zh = glossary_override(src) or cache.get(src, "")
             zh = norm(zh)
             if not zh:
                 continue
 
-            zh_fs = max(6.0, fs * FONTSIZE_SCALE)
+            # Chinese font sizing inside the same box
+            zh_fs = max(ZH_MIN_FONTSIZE, fs * ZH_SIZE_SCALE)
 
-            zh_x0 = x1 + GAP_PT
-            max_w = page_w - zh_x0 - RIGHT_MARGIN_PT
+            # Use EXACT same bbox as English
+            rect = fitz.Rect(x0, y0, x1, y1)
+            W = page.rect.width
+            H = page.rect.height
 
-            if max_w < 20:
-                zh_x0 = x0
-                zh_y0 = y1 + 2
-                rect = fitz.Rect(zh_x0, zh_y0, page_w - RIGHT_MARGIN_PT, zh_y0 + (y1 - y0) + 6)
-            else:
-                rect = fitz.Rect(zh_x0, y0, zh_x0 + max_w, y1 + 6)
+            rot = 0  # 0/90/180/270
+            # If you want to "undo" the page rotation, rotate clockwise by rot:
+            # rect = rotate_rect_cw_90n(page.derotation_matrix,rect, W, H,  deg_cw=rot)
 
-            page.insert_textbox(
-                rect,
+            # page.insert_textbox(
+            #     rect,
+            #     zh,
+            #     fontname=FONTNAME,
+            #     fontsize=zh_fs,
+            #     color=(1, 0, 0),  # red
+            #     overlay=True,
+            #     align=fitz.TEXT_ALIGN_LEFT,
+            # )
+            # page.insert_text(
+            #     fitz.Point(anchor_x, anchor_y),
+            #     zh,
+            #     fontname=FONTNAME,
+            #     fontsize=zh_fs,
+            #     color=(1, 0, 0),
+            #     rotate=angle,
+            #     overlay=True,
+            # )
+            page.insert_text(
+                fitz.Point(anchor_x, anchor_y),
                 zh,
                 fontname=FONTNAME,
                 fontsize=zh_fs,
-                color=(1, 0, 0),  # RED
+                color=(1, 0, 0),
+                # rotate=angle,
                 overlay=True,
-                align=fitz.TEXT_ALIGN_LEFT,
+                rotate=page.rotation
             )
+
             inserted += 1
 
-        # ---- checkpoint save every N pages ----
-        if page_idx % checkpoint_every == 0 or page_idx == doc.page_count:
+        if page_idx % CHECKPOINT_EVERY == 0 or page_idx == doc.page_count:
             chk_path = f"{base}_p{page_idx:03d}{ext}"
             if os.path.exists(chk_path):
                 os.remove(chk_path)
-
-            # Full save checkpoint (safe). This can take time but preserves progress.
             doc.save(chk_path, garbage=4, deflate=True)
-            print(f"[CHECKPOINT] Saved {chk_path} (page {page_idx}/{doc.page_count}) | inserted: {inserted}")
-    # Compress output to keep size manageable
+            print(f"[CHECKPOINT] Saved {chk_path} | page {page_idx}/{doc.page_count} | inserted: {inserted}")
+
+    # final save
     if os.path.exists(PDF_OUT):
         os.remove(PDF_OUT)
     doc.save(PDF_OUT, garbage=4, deflate=True)
