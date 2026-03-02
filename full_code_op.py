@@ -7,16 +7,13 @@ import fitz  # PyMuPDF
 from openai import OpenAI
 from openai import APIError, RateLimitError, APITimeoutError, BadRequestError
 import math
-# =========================
-# CONFIG
-# =========================
-# PDF_IN  = "archi.pdf"
-# PDF_OUT = "archi_output.pdf"
-PDF_IN  = "structure.pdf"
-PDF_OUT = "structure_output.pdf"
 
-# If you want to hardcode, set an absolute path here.
-# Otherwise leave blank and auto-detect common macOS locations.
+# =========================
+# CONFIG (same as yours)
+# =========================
+PDF_IN  = "archi.pdf"
+OUT_DIR = "out_pages"          # NEW: folder with one PDF per page
+
 FONTFILE = "PingFangSC.ttc"
 FONTNAME = "CN"
 
@@ -36,17 +33,16 @@ GLOSSARY = {
 
 SKIP_REGEX = [
     r"^\s*$",
-    r"^\s*[A-Z]{1,3}\d+(\.\d+)?\s*$",               # A0.1, S101
-    r"^\s*\d+\s*/\s*[A-Z]\d+(\.\d+)?\s*$",          # 3/A401
-    r"^[A-Z]{1,5}[-_][A-Z0-9-]{3,}$",               # TK-PS03-01
-    r"^[0-9\s,.'\"-]+$",                            # mostly numbers/symbols
-    r"^\(?[EN]\)?$",                                # (E) or (N) alone
+    r"^\s*[A-Z]{1,3}\d+(\.\d+)?\s*$",
+    r"^\s*\d+\s*/\s*[A-Z]\d+(\.\d+)?\s*$",
+    r"^[A-Z]{1,5}[-_][A-Z0-9-]{3,}$",
+    r"^[0-9\s,.'\"-]+$",
+    r"^\(?[EN]\)?$",
 ]
 SKIP_RE = [re.compile(p) for p in SKIP_REGEX]
 
-
 # =========================
-# HELPERS
+# HELPERS (same as yours)
 # =========================
 def norm(s: str) -> str:
     return " ".join((s or "").replace("\u00a0", " ").split()).strip()
@@ -83,8 +79,6 @@ def save_cache(path: str, cache: dict):
 def pick_fontfile(cfg: str) -> str:
     if cfg and os.path.exists(cfg):
         return cfg
-
-    # common macOS locations
     candidates = [
         "/System/Library/Fonts/Supplemental/PingFang.ttc",
         "/System/Library/Fonts/PingFang.ttc",
@@ -95,19 +89,11 @@ def pick_fontfile(cfg: str) -> str:
     for p in candidates:
         if os.path.exists(p):
             return p
-
-    # if user had a local file like PingFangSC.ttc in cwd
-    local = "PingFangSC.ttc"
-    if os.path.exists(local):
-        return local
-
-    raise FileNotFoundError(
-        "No Chinese font file found. Set FONTFILE to an absolute path like "
-        "/System/Library/Fonts/Supplemental/PingFang.ttc"
-    )
+    if os.path.exists("PingFangSC.ttc"):
+        return "PingFangSC.ttc"
+    raise FileNotFoundError("No Chinese font file found.")
 
 def call_with_retry(fn, max_tries=6):
-    """Retry transient API errors with exponential backoff + jitter."""
     for attempt in range(1, max_tries + 1):
         try:
             return fn()
@@ -115,10 +101,8 @@ def call_with_retry(fn, max_tries=6):
             wait = min(60, (2 ** (attempt - 1)) + random.random())
             print(f"[WARN] API transient error on attempt {attempt}/{max_tries}: {e}. Sleeping {wait:.1f}s")
             time.sleep(wait)
-        except BadRequestError as e:
-            # Bad request won't succeed on retry; raise immediately.
+        except BadRequestError:
             raise
-
     raise RuntimeError("API failed after retries.")
 
 def translate_batch(client: OpenAI, texts: list[str]) -> dict[str, str]:
@@ -173,8 +157,7 @@ Translate these items:
     resp = call_with_retry(_do)
     content = (resp.output_text or "").strip()
     if not content:
-        raise RuntimeError("Empty model output. Check quota/billing/model.")
-
+        raise RuntimeError("Empty model output.")
     data = json.loads(content)
 
     out = {}
@@ -185,8 +168,12 @@ Translate these items:
         out[src] = forced if forced else zh
     return out
 
-
+# =========================
+# MAIN (single-page output)
+# =========================
 def main():
+    os.makedirs(OUT_DIR, exist_ok=True)
+
     if not os.path.exists(PDF_IN):
         raise FileNotFoundError(f"PDF not found: {PDF_IN}")
 
@@ -196,26 +183,24 @@ def main():
     client = OpenAI()
     cache = load_cache(CACHE_PATH)
 
-    doc = fitz.open(PDF_IN)
-    print(f"[INFO] Pages: {doc.page_count}")
+    # Open input once; we will extract page-by-page but WRITE output page-by-page
+    src_doc = fitz.open(PDF_IN)
+    print(f"[INFO] Pages: {src_doc.page_count}")
 
-    # Embed font on each page (avoid ?????)
-    for i, page in enumerate(doc, start=1):
-        page.insert_font(fontname=FONTNAME, fontfile=fontfile)
-        if i % 5 == 0 or i == doc.page_count:
-            print(f"[INFO] Font embedded on page {i}/{doc.page_count}")
-
-    # 1) collect spans + todo strings
-    spans_per_page = []
+    # -------- PASS A: build todo across whole doc (keeps API behavior same as yours) --------
     todo = set()
+    spans_per_page = []  # store only metadata, not output doc
 
-    for p_idx, page in enumerate(doc, start=1):
+    for p_idx in range(src_doc.page_count):
+        page = src_doc[p_idx]
         d = page.get_text("dict")
+
         spans = []
         for block in d.get("blocks", []):
             if block.get("type", 0) != 0:
                 continue
             for line in block.get("lines", []):
+                dr = line.get("dir", (1.0, 0.0))
                 for sp in line.get("spans", []):
                     t = norm(sp.get("text") or "")
                     if not t:
@@ -224,43 +209,43 @@ def main():
                     if not bbox:
                         continue
                     fs = float(sp.get("size", 8.0))
-                    dr = line["dir"]
                     spans.append((t, bbox, fs, dr))
 
                     if should_translate(t) and glossary_override(t) is None and t not in cache:
                         todo.add(t)
+
         spans_per_page.append(spans)
 
-        if p_idx % 5 == 0 or p_idx == doc.page_count:
-            print(f"[INFO] Scanned page {p_idx}/{doc.page_count} | spans so far: {sum(len(x) for x in spans_per_page)} | unique todo: {len(todo)}")
+        if (p_idx + 1) % 5 == 0 or (p_idx + 1) == src_doc.page_count:
+            print(f"[INFO] Scanned page {p_idx+1}/{src_doc.page_count} | spans so far: {sum(len(x) for x in spans_per_page)} | unique todo: {len(todo)}")
 
-    # 2) translate batches
+    # -------- PASS B: translate missing strings --------
     todo = sorted(todo)
-    print(f"[INFO] Unique strings to translate (after cache/glossary/filters): {len(todo)}")
+    print(f"[INFO] Unique strings to translate: {len(todo)}")
     for i in range(0, len(todo), BATCH_SIZE):
-        chunk = todo[i:i+BATCH_SIZE]
+        chunk = todo[i:i + BATCH_SIZE]
         mapping = translate_batch(client, chunk)
         cache.update(mapping)
         save_cache(CACHE_PATH, cache)
-        print(f"[INFO] Translated {min(i+BATCH_SIZE, len(todo))}/{len(todo)} unique strings")
+        print(f"[INFO] Translated {min(i + BATCH_SIZE, len(todo))}/{len(todo)}")
 
-    # 3) insert Chinese in RED next to each bbox + save every 5 pages
-    inserted = 0
-    checkpoint_every = 1
+    # -------- PASS C: write ONE output file per page --------
+    total_inserted = 0
 
-    # base name for checkpoint outputs
-    base, ext = os.path.splitext(PDF_OUT)
-    if not base:
-        base = "output_bilingual"
+    for page_idx in range(src_doc.page_count):
+        # Create a new 1-page PDF by copying the page
+        out_doc = fitz.open()
+        out_doc.insert_pdf(src_doc, from_page=page_idx, to_page=page_idx)
+        out_page = out_doc[0]
 
-    for page_idx, (page, spans) in enumerate(zip(doc, spans_per_page), start=1):
-        page_w = page.rect.width
+        # Embed font on this one page
+        out_page.insert_font(fontname=FONTNAME, fontfile=fontfile)
 
+        page_w = out_page.rect.width
+        inserted = 0
+
+        spans = spans_per_page[page_idx]
         for src, (x0, y0, x1, y1), fs, dr in spans:
-            dx, dy = dr[0], dr[1]
-            raw = (math.degrees(math.atan2(dy, dx)) + 360) % 360
-            angle = (int(round(raw / 90.0)) * 90) % 360
-            angle = (360 - angle) % 360  # clockwise
             if not should_translate(src):
                 continue
 
@@ -269,60 +254,46 @@ def main():
             if not zh:
                 continue
 
+            # rotation (snap to 0/90/180/270)
+            dx, dy = dr[0], dr[1]
+            raw = (math.degrees(math.atan2(dy, dx)) + 360) % 360
+            angle = (int(round(raw / 90.0)) * 90) % 360
+            angle = (360 - angle) % 360  # clockwise
+
             zh_fs = max(6.0, fs * FONTSIZE_SCALE)
 
+            # place to the right (same as your logic)
             zh_x0 = x1 + GAP_PT
             max_w = page_w - zh_x0 - RIGHT_MARGIN_PT
-
             if max_w < 20:
-                zh_x0 = x0
-                zh_y0 = y1 + 2
-                rect = fitz.Rect(zh_x0, zh_y0, page_w - RIGHT_MARGIN_PT, zh_y0 + (y1 - y0) + 6)
+                # fallback below
+                rect = fitz.Rect(x0, y1 + 2, page_w - RIGHT_MARGIN_PT, y1 + (y1 - y0) + 6)
             else:
                 rect = fitz.Rect(zh_x0, y0, zh_x0 + max_w, y1 + 6)
 
-            if page.rotation == 0:
-                page.insert_textbox(
-                    rect,
-                    zh,
-                    fontname=FONTNAME,
-                    fontsize=zh_fs,
-                    color=(1, 0, 0),  # RED
-                    overlay=True,
-                    align=fitz.TEXT_ALIGN_LEFT,
-                )
-            else:
-                page.insert_text(
-                    fitz.Point(x0, y0),
-                    zh,
-                    fontname=FONTNAME,
-                    fontsize=zh_fs,
-                    color=(1, 0, 0),
-                    rotate=angle,
-                    overlay=True,
-                )
+            out_page.insert_text(
+                fitz.Point(x0, y0),
+                zh,
+                fontname=FONTNAME,
+                fontsize=zh_fs,
+                color=(1, 0, 0),
+                rotate=angle,
+                overlay=True,
+            )
 
             inserted += 1
+            total_inserted += 1
 
-            if inserted % 100 == 0:
-                print(inserted)
-        print(f"[INFO] Done inserting page {page_idx}/{doc.page_count} | inserted so far: {inserted}")
-        # ---- checkpoint save every N pages ----
-        if page_idx % checkpoint_every == 0 or page_idx == doc.page_count:
-            chk_path = f"{base}_p{page_idx:03d}{ext}"
-            if os.path.exists(chk_path):
-                os.remove(chk_path)
+        out_path = os.path.join(OUT_DIR, f"archi_output_p{page_idx+1:03d}.pdf")
+        if os.path.exists(out_path):
+            os.remove(out_path)
+        out_doc.save(out_path, garbage=4, deflate=True)
+        out_doc.close()
 
-            # Full save checkpoint (safe). This can take time but preserves progress.
-            doc.save(chk_path, garbage=4, deflate=True)
-            print(f"[CHECKPOINT] Saved {chk_path} (page {page_idx}/{doc.page_count}) | inserted: {inserted}")
-    # Compress output to keep size manageable
-    if os.path.exists(PDF_OUT):
-        os.remove(PDF_OUT)
-    doc.save(PDF_OUT, garbage=4, deflate=True)
-    doc.close()
-    print(f"[DONE] Saved: {PDF_OUT} | inserted zh items: {inserted}")
+        print(f"[INFO] Saved {out_path} | page {page_idx+1}/{src_doc.page_count} | inserted this page: {inserted} | inserted total: {total_inserted}")
 
+    src_doc.close()
+    print("[DONE] All pages exported to:", OUT_DIR)
 
 if __name__ == "__main__":
     main()

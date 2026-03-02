@@ -14,6 +14,9 @@ import math
 PDF_IN  = "wrong_original.pdf"
 PDF_OUT = "wrong_output.pdf"
 
+# PDF_IN  = "right_original.pdf"
+# PDF_OUT = "right_output.pdf"
+
 FONTFILE = "PingFangSC.ttc"   # or leave as-is if you already use auto-detect
 FONTNAME = "CN"
 
@@ -22,8 +25,8 @@ BATCH_SIZE = 50
 CACHE_PATH = ".cache_zh.json"
 
 # Chinese sizing inside same bbox
-ZH_SIZE_SCALE = 0.75
-ZH_MIN_FONTSIZE = 4.5
+ZH_SIZE_SCALE = 0.5
+ZH_MIN_FONTSIZE = 2.5
 
 # Draw red boxes around original English bboxes (debug)
 DRAW_REDBOX = True
@@ -51,6 +54,21 @@ SKIP_RE = [re.compile(p) for p in SKIP_REGEX]
 # =========================
 # HELPERS
 # =========================
+max_arrows_per_page = 10000   # to avoid clutter
+scale = 40                 # arrow length in points
+width = 1.5                # stroke width
+
+def draw_arrow(page, x0, y0, x1, y1, color=(1, 0, 0), w=1.5):
+    page.draw_line((x0, y0), (x1, y1), color=color, width=w, overlay=True)
+    ang = math.atan2(y1 - y0, x1 - x0)
+    head_len = 10
+    head_ang = math.radians(25)
+    hx1 = x1 - head_len * math.cos(ang - head_ang)
+    hy1 = y1 - head_len * math.sin(ang - head_ang)
+    hx2 = x1 - head_len * math.cos(ang + head_ang)
+    hy2 = y1 - head_len * math.sin(ang + head_ang)
+    page.draw_polyline([(hx1, hy1), (x1, y1), (hx2, hy2)], color=color, width=w, overlay=True)
+
 def rotate_rect_cw_90n(derot, rect: fitz.Rect, page_w: float, page_h: float, deg_cw: int) -> fitz.Rect:
     """
     Rotate an axis-aligned rect by deg_cw in {0,90,180,270} clockwise around the page.
@@ -94,7 +112,7 @@ def rotate_rect_cw_90n(derot, rect: fitz.Rect, page_w: float, page_h: float, deg
         #     (y1, page_w - x0),
         # ]
         h = min(rect.height, rect.width)
-        print("x0: {}, y0: {}, x1: {}, y1: {}".format(x0, y0, x1, y1))
+        # print("x0: {}, y0: {}, x1: {}, y1: {}".format(x0, y0, x1, y1))
         return fitz.Rect(x0 * derot, y0 * derot, x1 * derot, y1 * derot)
        
         pts = [
@@ -241,7 +259,7 @@ Translate these items:
     return out
 
 
-ROTATE_DEGREE = 0
+ROTATE_DEGREE = 270
 GAP_PT = 0
 
 def main():
@@ -266,16 +284,47 @@ def main():
     # 1) collect spans + todo strings
     spans_per_page = []
     todo = set()
+    arrows = 0
 
     for p_idx, page in enumerate(doc, start=1):
         # print(f"page {i}: rotation={page.rotation}")
         # page.set_rotation(ROTATE_DEGREE)
+        cx = page.rect.x0 + page.rect.width / 2
+        cy = page.rect.y0 + page.rect.height / 2
+
+        length = min(page.rect.width, page.rect.height) * 0.18
+        draw_arrow(page, cx, cy, cx + length, cy, color=(0, 1, 0), w=4)
+
+        label_rect = fitz.Rect(cx + 10, cy - 30, cx + 220, cy - 5)
+        page.insert_textbox(label_rect, "+X", fontsize=18, color=(0, 1, 0), overlay=True)
+
         d = page.get_text("dict")
         spans = []
         for block in d.get("blocks", []):
             if block.get("type", 0) != 0:
                 continue
             for line in block.get("lines", []):
+                # if arrows >= max_arrows_per_page:
+                #     break
+
+                # dirv = line.get("dir")
+                # bbox = line.get("bbox")
+                # if not dirv or not bbox:
+                #     continue
+
+                # dx, dy = float(dirv[0]), float(dirv[1])
+                # L = math.hypot(dx, dy) or 1.0
+                # dx, dy = dx / L, dy / L
+
+                # x0, y0, x1, y1 = bbox
+                # cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+                # ex, ey = cx + dx * scale, cy + dy * scale
+
+                # draw_arrow(page, cx, cy, ex, ey)
+                # arrows += 1
+
+                if "dir" in line:
+                    print("LINE dir:", line["dir"])
                 for sp in line.get("spans", []):
                     t = norm(sp.get("text") or "")
                     if not t:
@@ -284,7 +333,12 @@ def main():
                     if not bbox:
                         continue
                     fs = float(sp.get("size", 8.0))
-                    spans.append((t, bbox, fs))
+                    # if "dir" in sp:
+                    #     print("SPAN dir:", sp["dir"], "text:", (sp.get("text","") or "")[:30])
+                    # else:
+                    #     print("no direction")
+                    dr = line["dir"]
+                    spans.append((t, bbox, fs, dr))
                     if should_translate(t) and glossary_override(t) is None and t not in cache:
                         todo.add(t)
 
@@ -311,40 +365,41 @@ def main():
 
     for page_idx, (page, spans) in enumerate(zip(doc, spans_per_page), start=1):
         # page.set_rotation(ROTATE_DEGREE)
-        ox, oy = page.rect.x0, page.rect.y0  # usually (0,0)
+        # ox, oy = page.rect.x0, page.rect.y0  # usually (0,0)
 
-        # Arrow tail point (offset into the page)
-        tx, ty = ox + 120, oy + 120
+        # # Arrow tail point (offset into the page)
+        # tx, ty = ox + 120, oy + 120
 
-        # Draw arrow shaft
-        page.draw_line((tx, ty), (ox, oy), color=(1, 0, 0), width=3, overlay=True)
+        # # Draw arrow shaft
+        # page.draw_line((tx, ty), (ox, oy), color=(1, 0, 0), width=3, overlay=True)
 
-        # Draw arrowhead
-        angle = math.atan2(oy - ty, ox - tx)
-        head_len = 18
-        head_ang = math.radians(28)
+        # # Draw arrowhead
+        # angle = math.atan2(oy - ty, ox - tx)
+        # head_len = 18
+        # head_ang = math.radians(28)
 
-        x1 = ox + head_len * math.cos(angle + head_ang)
-        y1 = oy + head_len * math.sin(angle + head_ang)
-        x2 = ox + head_len * math.cos(angle - head_ang)
-        y2 = oy + head_len * math.sin(angle - head_ang)
+        # x1 = ox + head_len * math.cos(angle + head_ang)
+        # y1 = oy + head_len * math.sin(angle + head_ang)
+        # x2 = ox + head_len * math.cos(angle - head_ang)
+        # y2 = oy + head_len * math.sin(angle - head_ang)
 
-        page.draw_polyline([(x1, y1), (ox, oy), (x2, y2)], color=(1, 0, 0), width=3, overlay=True)
+        # page.draw_polyline([(x1, y1), (ox, oy), (x2, y2)], color=(1, 0, 0), width=3, overlay=True)
 
         # Label near the origin
-        label_rect = fitz.Rect(ox + 10, oy + 5, ox + 260, oy + 50)
-        page.insert_textbox(
-            label_rect,
-            "Origin (0,0)",
-            fontsize=16,
-            color=(1, 0, 0),
-            overlay=True,
-            align=fitz.TEXT_ALIGN_LEFT,
-        )
+        # label_rect = fitz.Rect(ox + 10, oy + 5, ox + 260, oy + 50)
+        # page.insert_textbox(
+        #     label_rect,
+        #     "Origin (0,0)",
+        #     fontsize=16,
+        #     color=(1, 0, 0),
+        #     overlay=True,
+        #     align=fitz.TEXT_ALIGN_LEFT,
+        # )
 
-        for src, (x0, y0, x1, y1), fs in spans:
-            dx, dy = sp.get("dir", (1.0, 0.0))   # baseline direction
-            angle = (math.degrees(math.atan2(dy, dx)) + 360) % 360
+        for src, (x0, y0, x1, y1), fs, dr in spans:
+            # dx, dy = sp.get("dir", (1.0, 0.0))   # baseline direction
+            dx, dy = dr[0], dr[1]
+            angle = 360 - (math.degrees(math.atan2(dy, dx)) + 360) % 360
             nx, ny = dy, -dx
             L = math.hypot(nx, ny) or 1.0
             nx, ny = nx/L, ny/L
@@ -383,6 +438,8 @@ def main():
             #     color=(1, 0, 0),  # red
             #     overlay=True,
             #     align=fitz.TEXT_ALIGN_LEFT,
+            #     # rotate=page.rotation
+
             # )
             # page.insert_text(
             #     fitz.Point(anchor_x, anchor_y),
@@ -393,15 +450,25 @@ def main():
             #     rotate=angle,
             #     overlay=True,
             # )
+            # page.insert_text(
+            #     fitz.Point(anchor_x, anchor_y),
+            #     zh,
+            #     fontname=FONTNAME,
+            #     fontsize=zh_fs,
+            #     color=(1, 0, 0),
+            #     rotate=angle,
+            #     overlay=True,
+            #     # rotate=page.rotation
+            # )
             page.insert_text(
-                fitz.Point(anchor_x, anchor_y),
+                fitz.Point(x0, y0),
                 zh,
                 fontname=FONTNAME,
                 fontsize=zh_fs,
                 color=(1, 0, 0),
-                # rotate=angle,
+                rotate=angle,
                 overlay=True,
-                rotate=page.rotation
+                # rotate=page.rotation
             )
 
             inserted += 1
