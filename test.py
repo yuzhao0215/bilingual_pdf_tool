@@ -7,12 +7,14 @@ from openai import OpenAI
 # =========================
 # CONFIG
 # =========================
-PDF_IN  = "sample2.pdf"
-PDF_OUT = "sample_bilingual_zh.pdf"
+INPUT_DIR = "input"
+OUTPUT_DIR = "output"
+PDF_IN  = os.path.join(INPUT_DIR, "sample2.pdf")
+PDF_OUT = os.path.join(OUTPUT_DIR, "sample_bilingual_zh.pdf")
 
 # Use a real Chinese font file on macOS
 # Choose ONE that exists:
-FONTFILE = "PingFangSC.ttc"
+FONTFILE = os.path.join("fonts", "PingFangSC.ttc")
 # FONTFILE = "/System/Library/Fonts/Hiragino Sans GB.ttc"
 # FONTFILE = "/System/Library/Fonts/STHeiti Medium.ttc"
 
@@ -144,6 +146,9 @@ Translate these items:
 # MAIN (same as your hello logic)
 # =========================
 def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    if not os.path.exists(PDF_IN):
+        raise FileNotFoundError(f"PDF not found: {PDF_IN}")
     if not os.path.exists(FONTFILE):
         raise FileNotFoundError(f"Font file not found: {FONTFILE}")
 

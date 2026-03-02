@@ -11,13 +11,15 @@ import math
 # =========================
 # CONFIG
 # =========================
-PDF_IN  = "wrong_original.pdf"
-PDF_OUT = "wrong_output.pdf"
+INPUT_DIR = "input"
+OUTPUT_DIR = "output"
+PDF_IN  = os.path.join(INPUT_DIR, "wrong_original.pdf")
+PDF_OUT = os.path.join(OUTPUT_DIR, "wrong_output.pdf")
 
-# PDF_IN  = "right_original.pdf"
-# PDF_OUT = "right_output.pdf"
+# PDF_IN  = os.path.join(INPUT_DIR, "right_original.pdf")
+# PDF_OUT = os.path.join(OUTPUT_DIR, "right_output.pdf")
 
-FONTFILE = "PingFangSC.ttc"   # or leave as-is if you already use auto-detect
+FONTFILE = os.path.join("fonts", "PingFangSC.ttc")   # or leave as-is if you already use auto-detect
 FONTNAME = "CN"
 
 MODEL = "gpt-4.1-mini"
@@ -173,9 +175,13 @@ def pick_fontfile(cfg: str) -> str:
         if os.path.exists(p):
             return p
 
-    local = "PingFangSC.ttc"
-    if os.path.exists(local):
-        return local
+    local_candidates = [
+        os.path.join("fonts", "PingFangSC.ttc"),
+        "PingFangSC.ttc",
+    ]
+    for local in local_candidates:
+        if os.path.exists(local):
+            return local
 
     raise FileNotFoundError(
         "No Chinese font file found. Set FONTFILE to an absolute path like "
@@ -263,6 +269,7 @@ ROTATE_DEGREE = 270
 GAP_PT = 0
 
 def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     if not os.path.exists(PDF_IN):
         raise FileNotFoundError(f"PDF not found: {PDF_IN}")
 

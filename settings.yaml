@@ -5,7 +5,7 @@ font:
   # or:
   #   /System/Library/Fonts/Supplemental/PingFang.ttc
   # If left blank, the script will try common macOS locations, then fall back to NotoSansCJK-Regular.ttc on Linux.
-  fontfile: "/System/Library/Fonts/Hiragino Sans GB.ttc"
+  fontfile: "fonts/PingFangSC.ttc"
   fontsize_scale: 0.90   # Chinese fontsize = English fontsize * scale
   color_rgb: [0, 0, 0]   # black
 

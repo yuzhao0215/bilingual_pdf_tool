@@ -4,11 +4,13 @@ import json
 import fitz  # PyMuPDF
 from openai import OpenAI
 
-PDF_IN  = "sample2.pdf"
-PDF_OUT = "sample_bilingual_debug.pdf"
+INPUT_DIR = "input"
+OUTPUT_DIR = "output"
+PDF_IN  = os.path.join(INPUT_DIR, "sample2.pdf")
+PDF_OUT = os.path.join(OUTPUT_DIR, "sample_bilingual_debug.pdf")
 
-# Choose ONE that exists on your Mac:
-FONTFILE = "/System/Library/Fonts/Hiragino Sans GB.ttc"
+# Choose ONE that exists:
+FONTFILE = os.path.join("fonts", "PingFangSC.ttc")
 # FONTFILE = "/System/Library/Fonts/STHeiti Medium.ttc"
 # FONTFILE = "/System/Library/Fonts/Supplemental/PingFang.ttc"
 
@@ -133,6 +135,9 @@ Translate these items:
 
 
 def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    if not os.path.exists(PDF_IN):
+        raise FileNotFoundError(f"PDF not found: {PDF_IN}")
     if not os.path.exists(FONTFILE):
         raise FileNotFoundError(f"Font file not found: {FONTFILE}")
 

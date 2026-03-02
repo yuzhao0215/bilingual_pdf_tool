@@ -10,14 +10,16 @@ import math
 # =========================
 # CONFIG
 # =========================
-# PDF_IN  = "archi.pdf"
-# PDF_OUT = "archi_output.pdf"
-PDF_IN  = "structure.pdf"
-PDF_OUT = "structure_output.pdf"
+INPUT_DIR = "input"
+OUTPUT_DIR = "output"
+# PDF_IN  = os.path.join(INPUT_DIR, "archi.pdf")
+# PDF_OUT = os.path.join(OUTPUT_DIR, "archi_output.pdf")
+PDF_IN  = os.path.join(INPUT_DIR, "structure.pdf")
+PDF_OUT = os.path.join(OUTPUT_DIR, "structure_output.pdf")
 
 # If you want to hardcode, set an absolute path here.
 # Otherwise leave blank and auto-detect common macOS locations.
-FONTFILE = "PingFangSC.ttc"
+FONTFILE = os.path.join("fonts", "PingFangSC.ttc")
 FONTNAME = "CN"
 
 MODEL = "gpt-4.1-mini"
@@ -96,10 +98,14 @@ def pick_fontfile(cfg: str) -> str:
         if os.path.exists(p):
             return p
 
-    # if user had a local file like PingFangSC.ttc in cwd
-    local = "PingFangSC.ttc"
-    if os.path.exists(local):
-        return local
+    # prefer project-local font files
+    local_candidates = [
+        os.path.join("fonts", "PingFangSC.ttc"),
+        "PingFangSC.ttc",
+    ]
+    for local in local_candidates:
+        if os.path.exists(local):
+            return local
 
     raise FileNotFoundError(
         "No Chinese font file found. Set FONTFILE to an absolute path like "
@@ -187,6 +193,7 @@ Translate these items:
 
 
 def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     if not os.path.exists(PDF_IN):
         raise FileNotFoundError(f"PDF not found: {PDF_IN}")
 

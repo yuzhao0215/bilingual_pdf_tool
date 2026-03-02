@@ -11,10 +11,12 @@ import math
 # =========================
 # CONFIG (same as yours)
 # =========================
-PDF_IN  = "archi.pdf"
-OUT_DIR = "out_pages"          # NEW: folder with one PDF per page
+INPUT_DIR = "input"
+OUTPUT_DIR = "output"
+PDF_IN  = os.path.join(INPUT_DIR, "archi.pdf")
+OUT_DIR = OUTPUT_DIR
 
-FONTFILE = "PingFangSC.ttc"
+FONTFILE = os.path.join("fonts", "PingFangSC.ttc")
 FONTNAME = "CN"
 
 MODEL = "gpt-4.1-mini"
@@ -89,8 +91,13 @@ def pick_fontfile(cfg: str) -> str:
     for p in candidates:
         if os.path.exists(p):
             return p
-    if os.path.exists("PingFangSC.ttc"):
-        return "PingFangSC.ttc"
+    local_candidates = [
+        os.path.join("fonts", "PingFangSC.ttc"),
+        "PingFangSC.ttc",
+    ]
+    for local in local_candidates:
+        if os.path.exists(local):
+            return local
     raise FileNotFoundError("No Chinese font file found.")
 
 def call_with_retry(fn, max_tries=6):

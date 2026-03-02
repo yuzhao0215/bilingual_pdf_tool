@@ -15,7 +15,7 @@ export OPENAI_API_KEY="YOUR_KEY"
 ```
 
 ## Prepare glossary (optional but recommended)
-Edit `glossary.csv`:
+Edit `glossary/glossary.csv`:
 - GENERAL NOTES,一般说明
 - TYP.,典型
 - VERIFY IN FIELD,现场核实
@@ -40,7 +40,7 @@ python bilingualize.py \
   --input "input.pdf" \
   --output "output_bilingual.pdf" \
   --settings settings.yaml \
-  --glossary glossary.csv
+  --glossary glossary/glossary.csv
 ```
 
 ## Notes / limitations

@@ -71,6 +71,14 @@ def pick_fontfile(cfg_fontfile: str) -> str:
         if os.path.exists(p):
             return p
 
+    local_candidates = [
+        os.path.join("fonts", "PingFangSC.ttc"),
+        "PingFangSC.ttc",
+    ]
+    for p in local_candidates:
+        if os.path.exists(p):
+            return p
+
     raise FileNotFoundError(
         "No CJK font file found. Set settings.yaml font.fontfile to your PingFang.ttc path."
     )
@@ -189,14 +197,17 @@ Translate these items:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", required=True, help="Input vector PDF")
-    ap.add_argument("--output", required=True, help="Output merged bilingual PDF")
+    ap.add_argument("--input", required=True, help="Input PDF (bare filename resolves under input/)")
+    ap.add_argument("--output", required=True, help="Output PDF (bare filename resolves under output/)")
     ap.add_argument("--settings", default="settings.yaml", help="YAML settings file")
-    ap.add_argument("--glossary", default="glossary.csv", help="Glossary CSV")
+    ap.add_argument("--glossary", default=os.path.join("glossary", "glossary.csv"), help="Glossary CSV")
     args = ap.parse_args()
+    input_path = args.input if os.path.isabs(args.input) or os.path.dirname(args.input) else os.path.join("input", args.input)
+    output_path = args.output if os.path.isabs(args.output) or os.path.dirname(args.output) else os.path.join("output", args.output)
+    glossary_path = args.glossary if os.path.isabs(args.glossary) or os.path.dirname(args.glossary) else os.path.join("glossary", args.glossary)
 
     cfg = yaml.safe_load(open(args.settings, "r", encoding="utf-8"))
-    glossary = load_glossary(args.glossary)
+    glossary = load_glossary(glossary_path)
 
     fontfile = pick_fontfile(cfg["font"].get("fontfile", ""))
     gap_pt = float(cfg["layout"]["gap_pt"])
@@ -211,7 +222,7 @@ def main():
     cache = load_cache(cache_path)
 
     # Collect all translatable unique strings
-    doc = fitz.open(args.input)
+    doc = fitz.open(input_path)
     all_spans_per_page: List[List[Span]] = []
     todo_set = set()
 
@@ -281,9 +292,10 @@ def main():
                 align=fitz.TEXT_ALIGN_LEFT,
             )
 
-    doc.save(args.output)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    doc.save(output_path)
     doc.close()
-    print(f"Saved: {args.output}")
+    print(f"Saved: {output_path}")
 
 
 if __name__ == "__main__":
