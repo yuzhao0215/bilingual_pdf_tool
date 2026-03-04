@@ -22,7 +22,7 @@ FONTNAME = "CN"  # internal name in the PDF
 
 MODEL = "gpt-4.1-mini"
 BATCH_SIZE = 50
-CACHE_PATH = ".cache_zh.json"
+CACHE_PATH = os.path.join("cache", ".cache_zh.json")
 
 GAP_PT = 6
 RIGHT_MARGIN_PT = 18
@@ -77,6 +77,7 @@ def load_cache(path: str) -> dict:
     return {}
 
 def save_cache(path: str, cache: dict):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 

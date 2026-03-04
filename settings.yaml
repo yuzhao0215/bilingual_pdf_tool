@@ -17,7 +17,7 @@ layout:
 translation:
   model: "gpt-4.1-mini"  # good price/perf for short text; change as you like
   batch_size: 30         # number of unique strings per API request
-  cache_path: ".cache_translations.json"
+  cache_path: "cache/.cache_translations.json"
 
 filters:
   skip_regex_file: "skip_regex.txt"
