@@ -14,11 +14,14 @@ from openai import APIError, RateLimitError, APITimeoutError, BadRequestError
 INPUT_DIR = "input"
 OUTPUT_DIR = "output"
 
+PDF_IN  = os.path.join(INPUT_DIR, "archi.pdf")
+PDF_OUT = os.path.join(OUTPUT_DIR, "archi_output_merge.pdf")
+
 # PDF_IN  = os.path.join(INPUT_DIR, "right_original.pdf")
 # PDF_OUT = os.path.join(OUTPUT_DIR, "right_original_output.pdf")
 
-PDF_IN  = os.path.join(INPUT_DIR, "wrong_original.pdf")
-PDF_OUT = os.path.join(OUTPUT_DIR, "wrong_original_output.pdf")
+# PDF_IN  = os.path.join(INPUT_DIR, "wrong_original.pdf")
+# PDF_OUT = os.path.join(OUTPUT_DIR, "wrong_original_output.pdf")
 
 FONTFILE = os.path.join("fonts", "PingFangSC.ttc")  # or auto-detect via pick_fontfile
 FONTNAME = "CN"
@@ -60,6 +63,56 @@ SKIP_RE = [re.compile(p) for p in SKIP_REGEX]
 # =========================
 # BASIC HELPERS
 # =========================
+def snap_dir_to_90(dx: float, dy: float) -> tuple[tuple[float, float], int]:
+    """Snap a direction vector to the nearest 0/90/180/270."""
+    ang = (math.degrees(math.atan2(dy, dx)) + 360) % 360
+    ang90 = (int(round(ang / 90.0)) * 90) % 360
+    # Convert snapped angle back to unit direction
+    if ang90 == 0:
+        return (1.0, 0.0), 0
+    if ang90 == 90:
+        return (0.0, 1.0), 90
+    if ang90 == 180:
+        return (-1.0, 0.0), 180
+    return (0.0, -1.0), 270
+
+def get_block_direction(block: dict) -> tuple[tuple[float, float], int]:
+    """
+    Compute dominant direction for a text block using its lines' 'dir'.
+    Returns (dir_vector, angle_deg) snapped to 0/90/180/270.
+    """
+    lines = block.get("lines", [])
+    if not lines:
+        return (1.0, 0.0), 0
+
+    # vote by line "length" (bbox width/height) to avoid tiny lines dominating
+    votes = {0: 0.0, 90: 0.0, 180: 0.0, 270: 0.0}
+
+    for ln in lines:
+        d = ln.get("dir", (1.0, 0.0))
+        dx, dy = float(d[0]), float(d[1])
+
+        # weight: use line bbox perimeter/area-ish
+        bb = ln.get("bbox")
+        w = h = 1.0
+        if bb:
+            w = max(1.0, float(bb[2] - bb[0]))
+            h = max(1.0, float(bb[3] - bb[1]))
+        weight = w + h  # simple, stable
+
+        _, ang90 = snap_dir_to_90(dx, dy)
+        votes[ang90] += weight
+
+    best_ang = max(votes, key=votes.get)
+    # Return unit vector for best angle
+    if best_ang == 0:
+        return (1.0, 0.0), 0
+    if best_ang == 90:
+        return (0.0, 1.0), 360-90
+    if best_ang == 180:
+        return (-1.0, 0.0), 180
+    return (0.0, -1.0), 360-270
+
 def norm(s: str) -> str:
     return " ".join((s or "").replace("\u00a0", " ").split()).strip()
 
@@ -314,6 +367,9 @@ def main():
             if block.get("type", 0) != 0:
                 continue
 
+            bdir, bang = get_block_direction(block)
+            # print("BLOCK dir:", bdir, "angle:", bang)
+
             lines = block.get("lines", [])
             i = 0
             while i < len(lines):
@@ -352,6 +408,7 @@ def main():
                     "bbox": (x0, y0, x1, y1),
                     "fs": fs,
                     "dir": dr,
+                    "ang": bang
                 })
 
                 # add to todo if needs translation
@@ -387,6 +444,7 @@ def main():
         page_w = page.rect.width
 
         for g in page_groups:
+            ang = g["ang"]
             src = g["src"]
             if not should_translate_text(src):
                 continue
@@ -421,16 +479,26 @@ def main():
                     zh_x0 + max_w,
                     y0 + h * HEIGHT_MULT
                 )
-
-            page.insert_textbox(
-                rect,
-                zh,
-                fontname=FONTNAME,
-                fontsize=zh_fs,
-                color=(1, 0, 0),
-                overlay=True,
-                align=fitz.TEXT_ALIGN_LEFT,
-            )
+            if page.rotation == 0:
+                page.insert_textbox(
+                    rect,
+                    zh,
+                    fontname=FONTNAME,
+                    fontsize=zh_fs,
+                    color=(1, 0, 0),
+                    overlay=True,
+                    align=fitz.TEXT_ALIGN_LEFT,
+                )
+            else:
+                page.insert_text(
+                    fitz.Point(x0, y0),
+                    zh,
+                    fontname=FONTNAME,
+                    fontsize=zh_fs,
+                    color=(1, 0, 0),
+                    rotate=ang,
+                    overlay=True,
+                )
             inserted += 1
 
         print(f"[INFO] Done inserting page {page_idx}/{doc.page_count} | inserted so far: {inserted}")
