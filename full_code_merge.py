@@ -7,6 +7,7 @@ import math
 import fitz  # PyMuPDF
 from openai import OpenAI
 from openai import APIError, RateLimitError, APITimeoutError, BadRequestError
+from collections import Counter
 
 # =========================
 # CONFIG
@@ -63,6 +64,49 @@ SKIP_RE = [re.compile(p) for p in SKIP_REGEX]
 # =========================
 # BASIC HELPERS
 # =========================
+
+def page_dominant_color(page_dict: dict, min_font_size: float) -> int | None:
+    c = Counter()
+    for block in page_dict.get("blocks", []):
+        if block.get("type", 0) != 0:
+            continue
+        for line in block.get("lines", []):
+            for sp in line.get("spans", []):
+                fs = float(sp.get("size", 0.0))
+                if fs < min_font_size:
+                    continue
+                t = (sp.get("text") or "").strip()
+                if not t:
+                    continue
+                col = sp.get("color")
+                if col is not None:
+                    c[col] += 1
+    if not c:
+        return None
+    return c.most_common(1)[0][0]
+
+def page_dominant_color_share(page_dict: dict, min_font_size: float, dom_color: int) -> float:
+    total = 0
+    dom = 0
+    for block in page_dict.get("blocks", []):
+        if block.get("type", 0) != 0:
+            continue
+        for line in block.get("lines", []):
+            for sp in line.get("spans", []):
+                fs = float(sp.get("size", 0.0))
+                if fs < min_font_size:
+                    continue
+                t = (sp.get("text") or "").strip()
+                if not t:
+                    continue
+                col = sp.get("color")
+                if col is None:
+                    continue
+                total += 1
+                if col == dom_color:
+                    dom += 1
+    return (dom / total) if total else 0.0
+
 def snap_dir_to_90(dx: float, dy: float) -> tuple[tuple[float, float], int]:
     """Snap a direction vector to the nearest 0/90/180/270."""
     ang = (math.degrees(math.atan2(dy, dx)) + 360) % 360
@@ -203,6 +247,8 @@ def _mean_font_size(line: dict) -> float:
 
 def _line_text(line: dict) -> str:
     return norm(" ".join((sp.get("text") or "").strip() for sp in line.get("spans", []) if (sp.get("text") or "").strip()))
+
+
 
 def should_merge_lines(prev_line: dict, next_line: dict,
                        gap_pt: float = MERGE_GAP_PT,
@@ -408,7 +454,8 @@ def main():
                     "bbox": (x0, y0, x1, y1),
                     "fs": fs,
                     "dir": dr,
-                    "ang": bang
+                    "ang": bang,
+                    "nlines": len(lines)
                 })
 
                 # add to todo if needs translation
@@ -446,16 +493,28 @@ def main():
         for g in page_groups:
             ang = g["ang"]
             src = g["src"]
+
+
             if not should_translate_text(src):
                 continue
 
             zh = apply_glossary_exact(src) or cache.get(src, "")
             zh = norm(zh)
+
+            nl = g["nlines"]
+
+            if nl > 1:
+                print("------This is a block with {} lines-------".format(nl))
+                print(zh)
+
             if not zh:
                 continue
 
             x0, y0, x1, y1 = g["bbox"]
             fs = float(g["fs"])
+
+            if fs < MIN_FONTSIZE:
+                continue
 
             zh_fs = max(MIN_FONTSIZE, fs * FONTSIZE_SCALE)
 
