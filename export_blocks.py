@@ -2,8 +2,9 @@ import os
 import csv
 import fitz  # PyMuPDF
 
-PDF_IN = "./input/right_original.pdf"
-CSV_OUT = "./output/" + PDF_IN.strip('.')[0] + "_blocks.csv"
+file_name = "archi_Extracted_p28.pdf"
+PDF_IN = "./input/" + file_name
+CSV_OUT = "./output/" + file_name.split('.')[0] + "_blocks.csv"
 
 # optional: ignore very small blocks
 MIN_CHARS = 5

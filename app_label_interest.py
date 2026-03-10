@@ -39,12 +39,33 @@ def load_df(up) -> pd.DataFrame:
 def render_page_pix(pdf_bytes: bytes, page_index: int, zoom: float):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     page = doc[page_index]
-    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-    doc.close()
-    return pix
 
-def crop_bbox_image(pix, bbox_pts, zoom: float, margin_pts: float):
+    page.set_rotation(0)
+
+    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+    rot = page.rotation
+    derot_matrix = page.derotation_matrix
+    doc.close()
+    return pix, rot, derot_matrix
+
+def crop_bbox_image(pix, bbox_pts, zoom: float, margin_pts: float, rotation=0, derot_matrix=None):
     x0, y0, x1, y1 = bbox_pts
+
+    
+
+    # first_point = fitz.Point(x0, y0)
+    # second_point = fitz.Point(x1, y1)
+
+    # if rotation != 0:
+    #     first_point = first_point * derot_matrix
+    #     second_point = second_point * derot_matrix
+        
+    #     x0 = first_point[0]
+    #     y0 = first_point[1]
+    #     x1 = second_point[0]
+    #     y1 = second_point[1]
+
+
     m = margin_pts
     x0m, y0m, x1m, y1m = x0 - m, y0 - m, x1 + m, y1 + m
 
@@ -113,8 +134,8 @@ left, right = st.columns([1, 1], gap="large")
 
 with left:
     st.subheader("Block crop")
-    pix = render_page_pix(pdf_bytes, page_index, zoom)
-    crop = crop_bbox_image(pix, bbox, zoom, margin_pts)
+    pix, rot, derot_matrix = render_page_pix(pdf_bytes, page_index, zoom)
+    crop = crop_bbox_image(pix, bbox, zoom, margin_pts, rot, derot_matrix)
     if crop is None:
         st.warning("Invalid bbox crop.")
     else:
